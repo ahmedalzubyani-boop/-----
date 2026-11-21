@@ -53,8 +53,8 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastPayload, setLastPayload] = useState<any>(null);
 
-  // Home view mode: 'analyzer' | 'pdf_deed' | 'deed_gemini' | 'standalone_chat'
-  const [viewMode, setViewMode] = useState<'analyzer' | 'pdf_deed' | 'deed_gemini' | 'standalone_chat'>('pdf_deed');
+  // Home view mode: 'deed_gemini' | 'pdf_deed' | 'analyzer' | 'standalone_chat'
+  const [viewMode, setViewMode] = useState<'analyzer' | 'pdf_deed' | 'deed_gemini' | 'standalone_chat'>('deed_gemini');
 
   const [activeTab, setActiveTab] = useState<
     'deed' | 'overview' | 'legality' | 'testimony' | 'evidence' | 'defenses' | 'consultant'
@@ -146,7 +146,7 @@ export default function App() {
     setAnalysis(null);
     setErrorMessage(null);
     setActiveTab('deed');
-    setViewMode('pdf_deed');
+    setViewMode('deed_gemini');
   };
 
   const handlePrint = () => {
@@ -211,7 +211,7 @@ ${analysis.chargesAndStatutes.map((c, i) => `${i + 1}. ${c.charge} - ${c.statute
         onReset={handleReset}
         onOpenChat={() => {
           setAnalysis(null);
-          setViewMode(viewMode === 'standalone_chat' ? 'pdf_deed' : 'standalone_chat');
+          setViewMode(viewMode === 'standalone_chat' ? 'deed_gemini' : 'standalone_chat');
         }}
         onOpenDeedAnalyzer={() => {
           setAnalysis(null);
@@ -262,6 +262,22 @@ ${analysis.chargesAndStatutes.map((c, i) => `${i + 1}. ${c.charge} - ${c.statute
           <div className="flex items-center gap-2 border-b border-slate-800 pb-3 overflow-x-auto no-scrollbar">
             <button
               type="button"
+              onClick={() => setViewMode('deed_gemini')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap ${
+                viewMode === 'deed_gemini'
+                  ? 'bg-blue-700 text-white shadow-md border border-blue-500/40'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <FileSearch className="w-4 h-4 text-blue-200" />
+              <span>تحليل صك الحكم (Gemini 4 &amp; GPT-4o)</span>
+              <span className="text-[10px] bg-blue-400/20 text-blue-200 border border-blue-300/40 px-1.5 py-0.2 rounded font-bold">
+                مفعّل
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setViewMode('pdf_deed')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap ${
                 viewMode === 'pdf_deed'
@@ -270,23 +286,7 @@ ${analysis.chargesAndStatutes.map((c, i) => `${i + 1}. ${c.charge} - ${c.statute
               }`}
             >
               <FileUp className="w-4 h-4 text-amber-200" />
-              <span>رفع صك الحكم القضائي (PDF/OCR)</span>
-              <span className="text-[10px] bg-amber-400/20 text-amber-200 border border-amber-300/40 px-1.5 py-0.2 rounded font-bold">
-                جديد
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setViewMode('deed_gemini')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap ${
-                viewMode === 'deed_gemini'
-                  ? 'bg-emerald-800 text-white shadow-md border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-              }`}
-            >
-              <FileSearch className="w-4 h-4 text-amber-300" />
-              <span>تحليل صك الحكم</span>
+              <span>تفنيد الصك والاعتراض (PDF/صور)</span>
             </button>
 
             <button

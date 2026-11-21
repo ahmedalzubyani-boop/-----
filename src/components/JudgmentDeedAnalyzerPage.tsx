@@ -79,7 +79,7 @@ interface SourceModalState {
   suggestedPage: number;
 }
 
-const ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+const ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const MAX_FILE_SIZE_BYTES = 35 * 1024 * 1024; // 35 MB (يكفي لصكوك تصل إلى 20+ صفحة)
 
 function readFileAsBase64(file: File): Promise<{ base64: string; mimeType: string }> {
@@ -93,6 +93,7 @@ function readFileAsBase64(file: File): Promise<{ base64: string; mimeType: strin
         const lower = file.name.toLowerCase();
         if (lower.endsWith('.pdf')) mimeType = 'application/pdf';
         else if (lower.endsWith('.png')) mimeType = 'image/png';
+        else if (lower.endsWith('.webp')) mimeType = 'image/webp';
         else if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mimeType = 'image/jpeg';
       }
       if (mimeType === 'image/jpg') mimeType = 'image/jpeg';
@@ -189,6 +190,7 @@ function formatFullAnalysisAsText(result: HighAccuracyDeedAnalysis): string {
 
 export const JudgmentDeedAnalyzerPage: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pdfQuickInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileObjectUrl, setFileObjectUrl] = useState<string | null>(null);
@@ -206,6 +208,11 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
   const [deedTextInput, setDeedTextInput] = useState('');
   const [textAnalysisResult, setTextAnalysisResult] = useState<string | null>(null);
   const [isTextLoading, setIsTextLoading] = useState(false);
+  const [isExtractingPdf, setIsExtractingPdf] = useState(false);
+  const [extractedPdfMeta, setExtractedPdfMeta] = useState<{
+    fileName: string;
+    totalPages: number;
+  } | null>(null);
 
   // Source verification modal state
   const [sourceModal, setSourceModal] = useState<SourceModalState>({
@@ -233,11 +240,12 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
       lowerName.endsWith('.pdf') ||
       lowerName.endsWith('.jpg') ||
       lowerName.endsWith('.jpeg') ||
-      lowerName.endsWith('.png');
+      lowerName.endsWith('.png') ||
+      lowerName.endsWith('.webp');
     const isValidMime = ACCEPTED_TYPES.includes(file.type.toLowerCase());
 
     if (!isValidMime && !isValidExt) {
-      return 'صيغة الملف غير مدعومة. يرجى اختيار ملف PDF أو صورة JPG أو PNG فقط.';
+      return 'صيغة الملف غير مدعومة. يرجى اختيار ملف PDF أو صورة (JPG / PNG / WebP) فقط.';
     }
     if (file.size > MAX_FILE_SIZE_BYTES) {
       return 'حجم الملف يتجاوز الحد المسموح به (35 ميجابايت). يرجى اختيار ملف أصغر.';
@@ -307,6 +315,7 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (file) {
       analyzeFile(file);
     }
@@ -394,6 +403,67 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
     });
   };
 
+  const handleQuickPdfAnalyze = async (file: File) => {
+    setInputMode('file');
+    await analyzeFile(file);
+  };
+
+  const handleQuickPdfExtractText = async (file: File) => {
+    const isPdf =
+      file.type.toLowerCase() === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+      setErrorMessage('يرجى اختيار ملف بصيغة PDF فقط.');
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setErrorMessage('حجم ملف PDF يتجاوز الحد المسموح به (35 ميجابايت). يرجى اختيار ملف أصغر.');
+      return;
+    }
+
+    setErrorMessage(null);
+    setExtractedPdfMeta(null);
+    setIsExtractingPdf(true);
+
+    try {
+      const { base64 } = await readFileAsBase64(file);
+      const response = await fetch('/api/extract-pdf-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileBase64: base64, fileName: file.name }),
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (response.ok && data?.success && data?.hasSelectableText && data?.text) {
+        setDeedTextInput(data.text);
+        setExtractedPdfMeta({
+          fileName: file.name,
+          totalPages: data.totalPages || 1,
+        });
+        return;
+      }
+
+      // If PDF is scanned (images only without selectable text), fall back seamlessly to full visual PDF analysis
+      setIsExtractingPdf(false);
+      setInputMode('file');
+      await analyzeFile(file);
+    } catch {
+      setIsExtractingPdf(false);
+      setInputMode('file');
+      await analyzeFile(file);
+    } finally {
+      setIsExtractingPdf(false);
+    }
+  };
+
+  const handleQuickPdfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) {
+      handleQuickPdfAnalyze(file);
+    }
+  };
+
   const handleRunTextTahlil = async () => {
     if (!deedTextInput.trim()) return;
     setIsTextLoading(true);
@@ -417,16 +487,21 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
     setFileMimeType('');
     setResult(null);
     setTextAnalysisResult(null);
+    setExtractedPdfMeta(null);
+    setIsExtractingPdf(false);
     setErrorMessage(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+    if (pdfQuickInputRef.current) {
+      pdfQuickInputRef.current.value = '';
     }
   };
 
   const isPdfFile = fileMimeType === 'application/pdf' || selectedFile?.name.toLowerCase().endsWith('.pdf');
 
   return (
-    <div className="space-y-6" dir="rtl">
+    <div className="space-y-6 max-w-full overflow-x-hidden" dir="rtl">
       {/* Page Hero Banner */}
       <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/50 border border-emerald-800/40 rounded-2xl p-6 shadow-xl">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -459,23 +534,60 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Input Mode Switcher (PDF/Image via Gemini 4 Hydrogen vs Pasted Text via OpenAI gpt-4o) */}
+      {/* Clear Explanation of Both Independent Engines (Gemini 4 vs OpenAI GPT-4o) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="bg-blue-950/30 border border-blue-700/50 rounded-xl p-4 flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-blue-600/20 border border-blue-500/40 text-blue-300 flex items-center justify-center shrink-0">
+            <FileUp className="w-4 h-4" />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs sm:text-sm font-bold text-blue-300 flex items-center gap-1.5">
+              <span>خيار Gemini 4 (للملفات والصور مباشرة)</span>
+            </div>
+            <p className="text-[11px] sm:text-xs text-slate-300 leading-relaxed">
+              مخصص لرفع ملفات <strong className="text-white">PDF</strong> وصور{' '}
+              <strong className="text-white">JPG / PNG</strong> وتحليلها صفحةً بصفحة مباشرة عبر{' '}
+              <strong className="text-blue-200">Gemini 4 Hydrogen</strong> باستخدام مفتاح{' '}
+              <code className="text-blue-300 font-mono">GEMINI_API_KEY</code> المنفصل عن OpenAI في
+              إعدادات الأسرار (<span className="text-blue-200">Settings &gt; Secrets</span>).
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-orange-950/30 border border-orange-700/50 rounded-xl p-4 flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-orange-600/20 border border-orange-500/40 text-orange-300 flex items-center justify-center shrink-0">
+            <FileText className="w-4 h-4" />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs sm:text-sm font-bold text-orange-300 flex items-center gap-1.5">
+              <span>خيار GPT-4o OpenAI (للتحليل عبر لصق النص)</span>
+            </div>
+            <p className="text-[11px] sm:text-xs text-slate-300 leading-relaxed">
+              مخصص لتحليل نصوص صكوك الأحكام ومحاضر الضبط عبر لصق النص مباشرة باستخدام مفتاح{' '}
+              <code className="text-orange-300 font-mono">OPENAI_API_KEY</code> بشكل مستقل تماماً
+              عن خيار Gemini.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Input Mode Switcher (Blue: Gemini 4 File/Image vs Orange: OpenAI gpt-4o Text Paste) */}
       {!isLoading && !isTextLoading && !result && !textAnalysisResult && (
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <button
             type="button"
             onClick={() => {
               setInputMode('file');
               setErrorMessage(null);
             }}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
               inputMode === 'file'
-                ? 'bg-emerald-700 text-white shadow-md border border-emerald-500/40'
-                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-950/50 border border-blue-400/60'
+                : 'bg-slate-900 text-slate-300 hover:text-white border border-blue-800/40 hover:border-blue-600/60'
             }`}
           >
-            <FileUp className="w-4 h-4 text-amber-300" />
-            <span>رفع ملف الصك (PDF / JPG / PNG — Gemini 4)</span>
+            <FileUp className="w-4 h-4 text-blue-200" />
+            <span>رفع ملف أو صورة (PDF / JPG / PNG — Gemini 4)</span>
           </button>
 
           <button
@@ -484,14 +596,14 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
               setInputMode('text');
               setErrorMessage(null);
             }}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
               inputMode === 'text'
-                ? 'bg-amber-600 text-white shadow-md border border-amber-400/40'
-                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                ? 'bg-orange-600 text-white shadow-md shadow-orange-950/50 border border-orange-400/60'
+                : 'bg-slate-900 text-slate-300 hover:text-white border border-orange-800/40 hover:border-orange-600/60'
             }`}
           >
-            <FileText className="w-4 h-4 text-amber-200" />
-            <span>لصق نص الصك للتحليل الفوري (OpenAI GPT-4o)</span>
+            <FileText className="w-4 h-4 text-orange-200" />
+            <span>لصق نص الصك للتحليل الفوري (GPT-4o OpenAI)</span>
           </button>
         </div>
       )}
@@ -507,72 +619,151 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
           onDrop={handleDrop}
           className={`rounded-2xl border-2 border-dashed p-8 sm:p-12 text-center transition-all ${
             isDragging
-              ? 'border-amber-400 bg-amber-950/20'
-              : 'border-slate-700 bg-slate-900/70 hover:border-emerald-600/70 hover:bg-slate-900'
+              ? 'border-blue-400 bg-blue-950/30'
+              : 'border-blue-700/60 bg-slate-900/70 hover:border-blue-500 hover:bg-slate-900'
           }`}
         >
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
             onChange={handleFileChange}
             className="hidden"
           />
 
-          <div className="mx-auto w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-amber-400 mb-4">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-blue-500/15 border border-blue-500/35 flex items-center justify-center text-blue-300 mb-4">
             <FileUp className="w-8 h-8" />
           </div>
 
           <h3 className="text-lg font-bold text-white mb-2">
-            ارفع ملف صك الحكم كاملاً للتحليل الدقيق
+            ارفع ملف صك الحكم أو صورته للتحليل المباشر عبر Gemini 4
           </h3>
           <p className="text-xs sm:text-sm text-slate-400 mb-6">
-            يقبل <span className="text-emerald-300 font-semibold">PDF</span> (حتى 20 صفحة وأكثر) أو صور{' '}
-            <span className="text-emerald-300 font-semibold">JPG</span> /{' '}
-            <span className="text-emerald-300 font-semibold">PNG</span> — يُرسل الملف كاملاً دون
-            تجزئة أو فقدان للصفحة الأخيرة.
+            يدعم <span className="text-blue-300 font-semibold">PDF</span> (حتى 20 صفحة وأكثر) وصور{' '}
+            <span className="text-blue-300 font-semibold">JPG</span> /{' '}
+            <span className="text-blue-300 font-semibold">PNG</span> /{' '}
+            <span className="text-blue-300 font-semibold">WebP</span> — يُرسل الملف كاملاً عبر
+            Gemini API دون تجزئة أو فقدان للصفحة الأخيرة.
           </p>
 
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-600 hover:to-emerald-500 text-white text-sm font-bold shadow-lg shadow-emerald-950/50 transition-all cursor-pointer"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-blue-700 to-blue-600 hover:from-blue-600 hover:to-blue-500 text-white text-sm font-bold shadow-lg shadow-blue-950/50 transition-all cursor-pointer"
           >
             <FileUp className="w-4 h-4" />
-            <span>اختيار ملف الصك (PDF / JPG / PNG)</span>
+            <span>اختيار ملف PDF أو صورة (Gemini 4)</span>
           </button>
         </div>
       )}
 
-      {/* Text Paste Card via OpenAI gpt-4o (tahlilSok) */}
+      {/* Text Paste & PDF Upload Card via OpenAI gpt-4o (tahlilSok) */}
       {inputMode === 'text' && !isLoading && !isTextLoading && !result && !textAnalysisResult && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
-          <div className="space-y-1">
-            <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-              <FileText className="w-5 h-5 text-amber-400" />
-              <span>لصق نص صك الحكم أو محضر الضبط للتحليل (OpenAI GPT-4o)</span>
-            </h3>
-            <p className="text-xs text-slate-400">
-              يستدعي دالة <code className="text-amber-300">tahlilSok</code> على الخادم باستخدام{' '}
-              <code className="text-emerald-300">OPENAI_API_KEY</code> من إعدادات الأسرار / ملف{' '}
-              <code className="text-emerald-300">.env</code> بأمان دون تضمين المفتاح في المتصفح.
-            </p>
+        <div className="bg-slate-900 border border-orange-800/50 rounded-2xl p-4 sm:p-6 space-y-4 shadow-xl">
+          <input
+            ref={pdfQuickInputRef}
+            type="file"
+            accept=".pdf,application/pdf"
+            onChange={handleQuickPdfChange}
+            className="hidden"
+          />
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1 min-w-0">
+              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2 flex-wrap">
+                <FileText className="w-5 h-5 text-orange-400 shrink-0" />
+                <span>لصق نص صك الحكم أو رفع ملف PDF للتحليل (OpenAI GPT-4o &amp; Gemini 4)</span>
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                لصق النص يحلل مباشرة عبر <code className="text-orange-300">OPENAI_API_KEY</code>،
+                وعند الضغط على «رفع ملف PDF» يتم تحليل الصك كاملاً صفحةً بصفحة بأعلى دقة ممكنة.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => pdfQuickInputRef.current?.click()}
+              disabled={isExtractingPdf}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600/20 hover:bg-blue-600/35 disabled:opacity-50 text-blue-200 hover:text-white border border-blue-500/50 text-xs sm:text-sm font-bold shadow-sm transition-colors cursor-pointer shrink-0"
+            >
+              <FileUp className="w-4 h-4 text-blue-300" />
+              <span>رفع ملف PDF</span>
+            </button>
           </div>
+
+          {extractedPdfMeta && (
+            <div className="flex items-center justify-between flex-wrap gap-2 bg-emerald-950/40 border border-emerald-700/50 rounded-xl px-4 py-2.5 text-xs text-emerald-200">
+              <div className="flex items-center gap-2">
+                <FileCheck2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>
+                  تم استخراج النص من ملف <strong className="text-white">{extractedPdfMeta.fileName}</strong> (
+                  {extractedPdfMeta.totalPages} صفحة) — يمكنك مراجعته أو الضغط على «تحليل النص الآن (GPT-4o)»
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeedTextInput('');
+                  setExtractedPdfMeta(null);
+                }}
+                className="text-slate-400 hover:text-white cursor-pointer"
+                title="مسح النص"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           <textarea
             value={deedTextInput}
             onChange={(e) => setDeedTextInput(e.target.value)}
             rows={8}
-            placeholder="الصق هنا نص صك الحكم أو محضر الضبط أو التحقيق..."
-            className="w-full rounded-xl bg-slate-950 border border-slate-700 focus:border-amber-500 focus:outline-none p-4 text-xs sm:text-sm text-slate-100 leading-relaxed resize-y"
+            placeholder="الصق هنا نص صك الحكم أو محضر الضبط، أو اضغط على زر «رفع ملف PDF» لتحليل الصك كاملاً بدقة عالية..."
+            className="w-full rounded-xl bg-slate-950 border border-slate-700 focus:border-orange-500 focus:outline-none p-4 text-xs sm:text-sm text-slate-100 leading-relaxed resize-y"
           />
 
-          <div className="flex items-center justify-end gap-3">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => pdfQuickInputRef.current?.click()}
+                disabled={isExtractingPdf}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs sm:text-sm font-bold shadow-md transition-colors cursor-pointer"
+              >
+                <FileUp className="w-4 h-4 text-blue-200" />
+                <span>رفع ملف PDF (تحليل شامل عالي الدقة)</span>
+              </button>
+
+              <label className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-orange-200 border border-orange-600/40 text-xs font-semibold transition-colors cursor-pointer">
+                {isExtractingPdf ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400" />
+                    <span>جاري سحب النص...</span>
+                  </>
+                ) : (
+                  <>
+                    <FileText className="w-3.5 h-3.5 text-orange-400" />
+                    <span>سحب نص PDF للمربع</span>
+                  </>
+                )}
+                <input
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file) handleQuickPdfExtractText(file);
+                  }}
+                />
+              </label>
+            </div>
+
             <button
               type="button"
               onClick={handleRunTextTahlil}
-              disabled={!deedTextInput.trim()}
-              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-xs sm:text-sm font-bold shadow-md transition-colors cursor-pointer"
+              disabled={!deedTextInput.trim() || isExtractingPdf}
+              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white text-xs sm:text-sm font-bold shadow-md transition-colors cursor-pointer"
             >
               <Sparkles className="w-4 h-4" />
               <span>تحليل النص الآن (GPT-4o)</span>

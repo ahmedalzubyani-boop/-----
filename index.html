@@ -15,8 +15,16 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&family=Amiri:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
   </head>
-  <body class="bg-slate-950 text-slate-100 font-sans antialiased selection:bg-emerald-700 selection:text-white">
+  <body class="bg-slate-950 text-slate-100 font-sans antialiased selection:bg-emerald-700 selection:text-white" style="background-color:#020617;color:#f1f5f9;">
     <div id="root"></div>
+    <script>
+      window.addEventListener('error', function () {
+        var root = document.getElementById('root');
+        if (root && !root.hasChildNodes()) {
+          root.innerHTML = '<div dir="rtl" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;font-family:Cairo,sans-serif;text-align:center;"><div><h2 style="margin-bottom:8px;">تعذر تحميل التطبيق</h2><p style="color:#94a3b8;font-size:14px;margin-bottom:16px;">يرجى تحديث الصفحة للمحاولة مرة أخرى.</p><button onclick="location.reload()" style="background:#047857;color:#fff;border:none;padding:10px 20px;border-radius:10px;cursor:pointer;font-weight:bold;">إعادة تحميل الصفحة</button></div></div>';
+        }
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

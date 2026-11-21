@@ -92,20 +92,26 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
     };
     reader.readAsDataURL(file);
 
-    // Extract text in browser from digital PDF
-    const textReader = new FileReader();
-    textReader.onload = () => {
-      try {
-        const raw = textReader.result as string;
-        const arabicMatches = raw.match(/[\u0600-\u06FF\u0750-\u077F0-9/:\-\s]{4,}/g);
-        if (arabicMatches && arabicMatches.length > 3) {
-          setExtractedText(arabicMatches.join(' '));
+    // Only keep extracted text if readable uncompressed Arabic sentences actually exist
+    if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+      const textReader = new FileReader();
+      textReader.onload = () => {
+        try {
+          const raw = textReader.result as string;
+          const arabicWords = raw.match(/[\u0600-\u06FF]{3,}(?:\s+[\u0600-\u06FF0-9/\-]{2,})*/g);
+          if (arabicWords && arabicWords.length > 8) {
+            setExtractedText(arabicWords.join(' '));
+          } else {
+            setExtractedText('');
+          }
+        } catch {
+          setExtractedText('');
         }
-      } catch (e) {
-        console.log('PDF text parsing note:', e);
-      }
-    };
-    textReader.readAsText(file);
+      };
+      textReader.readAsText(file);
+    } else {
+      setExtractedText('');
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -288,8 +294,12 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
             <input
               type="file"
               ref={fileInputRef}
-              onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
-              accept=".pdf,application/pdf"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (file) handleFile(file);
+              }}
+              accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
               className="hidden"
             />
 
@@ -300,10 +310,10 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
                 </div>
                 <div className="space-y-1">
                   <p className="text-sm font-bold text-slate-200">
-                    اسحب وأفلت ملف صك الحكم (PDF) هنا، أو اضغط للاستعراض
+                    اسحب وأفلت ملف صك الحكم (PDF أو صورة JPG/PNG) هنا، أو اضغط للاستعراض
                   </p>
                   <p className="text-xs text-slate-400">
-                    يدعم ملفات PDF الصادرة عن المحاكم وبوابة ناجز والماسح الضوئي حتى 50 ميغابايت
+                    يدعم ملفات PDF والصور الصادرة عن المحاكم وبوابة ناجز والماسح الضوئي حتى 50 ميغابايت
                   </p>
                 </div>
 
@@ -314,7 +324,7 @@ export const PdfJudgmentUploadCard: React.FC<PdfJudgmentUploadCardProps> = ({
                     className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold border border-slate-700 shadow-sm transition-colors inline-flex items-center gap-2"
                   >
                     <FileText className="w-4 h-4 text-emerald-400" />
-                    <span>اختيار ملف صك الحكم من جهازك</span>
+                    <span>اختيار ملف صك الحكم (PDF / صورة)</span>
                   </button>
                 </div>
               </div>

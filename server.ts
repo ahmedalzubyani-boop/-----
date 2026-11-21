@@ -1,8 +1,10 @@
 import express from 'express';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { extractText } from 'unpdf';
 import {
   generateSaudiLegalAnalysisFallback,
   generateIntelligentJudicialAdvisorReply,
@@ -168,39 +170,61 @@ export async function tahlilSok(nasSok: string): Promise<string> {
   }
 
   return await callOpenAILegalAdvisor({
-    messages: [{ role: 'user', content: `قم بتحليل هذا النص من الصك: ${nasSok}` }],
+    messages: [
+      {
+        role: 'user',
+        content: `اقرأ هذا النص من صك الحكم أو المحضر بدقة عالية واستخرج جميع البيانات كما وردت حرفياً دون أي اختصار مخل أو تخمين:\n\n"""\n${nasSok}\n"""`,
+      },
+    ],
     preferredModel: 'gpt-4o',
-    systemInstruction: `أنت مستشار قضائي سعودي خبير. قم بتحليل صكوك الأحكام القضائية ومحاضر الضبط والتحقيقات بدقة وفقاً للأنظمة السعودية. أخرج النتيجة منظمة في أقسام واضحة.
+    systemInstruction: `أنت قاضٍ ومستشار تدقيق قضائي سعودي خبير. قم بتحليل صكوك الأحكام القضائية ومحاضر الضبط والتحقيقات بدقة حرفية مطلقة وفقاً للأنظمة السعودية.
 
-القواعد الإلزامية قبل تصنيف أي حكم أو صياغة أي اعتراض:
-1. حدد نوع الحكم ودرجته أولاً من منطوقه ورقمه والجهة المصدرة له:
+قواعد الدقة الإلزامية (يجب تطبيقها حرفياً دون استثناء):
+1. لا تخمن أبداً: أي معلومة أو رقم غير مذكور صراحة في النص المرفق اكتب أمامه: "غير مذكورة في النص المرفق" ولا تخترع أي معلومة.
+2. تحقق مرتين من كل رقم وتاريخ وهوية ومبلغ ومدة سجن وطابقه مع النص قبل كتابته.
+3. رصد التناقضات: إذا وُجد رقمان أو معلومتان متعارضتان داخل النص، نبه عليها في قسم "تنبيهات الدقة".
+4. التمييز الصارم بين درجات الحكم ومسار الاعتراض:
    - إذا كان صادراً من المحكمة الابتدائية: حكم ابتدائي، والطريق الصحيح هو الاعتراض بالاستئناف أمام محكمة الاستئناف.
-   - إذا كان صادراً من محكمة الاستئناف: حكم استئنافي (وهو الحكم المعتمد والنافذ)، ولا يجوز أبداً صياغة استئناف عليه مرة ثانية؛ والطريق الصحيح هو طلب النقض أمام المحكمة العليا فقط إن جاز نظاماً.
+   - إذا كان صادراً من محكمة الاستئناف: حكم استئنافي نافذ، والطريق الصحيح هو طلب النقض أمام المحكمة العليا فقط إن جاز نظاماً (ولا يجوز أبداً صياغة استئناف ثانٍ عليه).
    - إذا كان صادراً من المحكمة العليا: حكم نهائي بات لا يقبل أي اعتراض.
-2. لا تخمن أي رقم أو تاريخ غير مذكور صراحة في النص، وإذا غابت معلومة اكتب: "غير مذكورة في النص المرفق".
-3. لا تناقض نفسك أبداً في المسار النظامي للاعتراض.`,
+5. أخرج التحليل منظماً في هذه الأقسام الواضحة:
+   - أولاً: بيانات الصك والقضية والمحكمة والدائرة والتاريخ.
+   - ثانياً: الأطراف وأرقام الهويات/السجلات.
+   - ثالثاً: ملخص الوقائع والأدلة والأسانيد النظامية.
+   - رابعاً: منطوق الحكم حرفياً (كما ورد تماماً دون تعديل).
+   - خامساً: العقوبات أو المبالغ المحكوم بها.
+   - سادساً: الصفة النهائية والقطعية ومسار الاعتراض الصحيح والمهلة النظامية.
+   - سابعاً: تنبيهات الدقة (إن وجدت) + ملخص مبسط للنتيجة.`,
   });
 }
 
-// Support multi-provider and common deployment env variable keys
-const apiKey =
-  process.env.GEMINI_API_KEY ||
-  process.env.GOOGLE_API_KEY ||
-  process.env.GOOGLE_GENAI_API_KEY ||
-  process.env.VITE_GEMINI_API_KEY ||
-  '';
+// Support independent Gemini API key (completely separate from OPENAI_API_KEY)
+function getGeminiApiKey(): string {
+  return (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY ||
+    ''
+  ).trim();
+}
 
-// Track quota exhaustion for free-tier 20 RPD limit on gemini-3.8-flash
-let is38QuotaExhausted = false;
-
-const ai = new GoogleGenAI({
-  apiKey: apiKey || 'dummy-fallback-key',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+function getGeminiClient(): GoogleGenAI | null {
+  const key = getGeminiApiKey();
+  if (!key || key === 'dummy-fallback-key' || key === 'MY_GEMINI_API_KEY') {
+    return null;
+  }
+  return new GoogleGenAI({
+    apiKey: key,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
     },
-  },
-});
+  });
+}
+
+// Track quota exhaustion for primary model fallback
+let isPrimaryQuotaExhausted = false;
 
 const SYSTEM_INSTRUCTION = `
 أنت مستشار ومحلل قانوني وقضائي سعودي رفيع المستوى، متخصص وخبير في الأنظمة العدلية والقضائية المعمول بها في المملكة العربية السعودية ومحاكم وزارة العدل والنيابة العامة.
@@ -274,13 +298,13 @@ async function generateContentWithRetry(options: {
   preferredModel?: string;
   timeoutMs?: number;
 }): Promise<string> {
-  if (!apiKey || apiKey === 'dummy-fallback-key') {
-    throw new Error('GEMINI_API_KEY is not configured, using legal analyzer fallback');
+  const client = getGeminiClient();
+  if (!client) {
+    throw new Error('GEMINI_API_KEY is not configured');
   }
 
-  // If 3.8 Flash previously exhausted its 20 RPD free tier quota, route directly to 3.1 Flash Lite (1500 RPD)
-  let primaryModel = options.preferredModel || 'gemini-3.8-flash';
-  if (is38QuotaExhausted && primaryModel === 'gemini-3.8-flash') {
+  let primaryModel = options.preferredModel || 'gemini-4-hydrogen';
+  if (isPrimaryQuotaExhausted && primaryModel === 'gemini-4-hydrogen') {
     primaryModel = 'gemini-3.1-flash-lite';
   }
 
@@ -291,14 +315,13 @@ async function generateContentWithRetry(options: {
     if (options.responseMimeType) {
       config.responseMimeType = options.responseMimeType;
     }
-    // Only Gemini 3.8 Flash supports thinkingLevel
-    if (model === 'gemini-3.8-flash') {
+    if (model === 'gemini-4-hydrogen') {
       config.thinkingConfig = {
         thinkingLevel: ThinkingLevel.LOW,
       };
     }
 
-    const res: any = await ai.models.generateContent({
+    const res: any = await client.models.generateContent({
       model,
       contents: options.contents,
       config,
@@ -315,7 +338,7 @@ async function generateContentWithRetry(options: {
     return await callModel('gemini-3.1-flash-lite');
   }
 
-  // Resilient execution: Launch primary model (gemini-3.8-flash)
+  // Resilient execution: Launch primary model (gemini-4-hydrogen)
   // If primary model takes longer than 20s or fails, hedge with gemini-3.1-flash-lite to prevent timeouts
   return new Promise<string>((resolve, reject) => {
     let isSettled = false;
@@ -337,7 +360,7 @@ async function generateContentWithRetry(options: {
       }
     }, maxTimeoutMs);
 
-    // 1. Primary Model Call (gemini-3.8-flash)
+    // 1. Primary Model Call (gemini-4-hydrogen)
     callModel(primaryModel)
       .then((text) => {
         if (!isSettled) {
@@ -350,10 +373,9 @@ async function generateContentWithRetry(options: {
         const errMsg = primaryErr?.message || String(primaryErr);
         console.log(`[Judicial AI] Primary model ${primaryModel} encounter:`, errMsg);
 
-        // Detect 429 quota exhaustion on free tier (20 RPD)
         if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('RESOURCE_EXHAUSTED')) {
-          console.log('[Judicial AI] Detected free-tier quota exhaustion for gemini-3.8-flash. Switching to high-quota gemini-3.1-flash-lite.');
-          is38QuotaExhausted = true;
+          console.log('[Judicial AI] Detected quota limit for gemini-4-hydrogen. Switching to gemini-3.1-flash-lite.');
+          isPrimaryQuotaExhausted = true;
         }
 
         // Run fast high-quota backup immediately without waiting
@@ -557,7 +579,7 @@ ${documentText || '[مرفق ملف صك الحكم بصيغة PDF أو صورة
         contents: { parts: contents },
         systemInstruction: SYSTEM_INSTRUCTION,
         responseMimeType: 'application/json',
-        preferredModel: 'gemini-3.8-flash',
+        preferredModel: 'gemini-4-hydrogen',
       });
 
       parsedData = extractJson(outputText);
@@ -698,7 +720,7 @@ ${SYSTEM_INSTRUCTION}
       });
     }
 
-    const selectedModel = modelChoice === 'fast' ? 'gemini-3.1-flash-lite' : 'gemini-3.8-flash';
+    const selectedModel = modelChoice === 'fast' ? 'gemini-3.1-flash-lite' : 'gemini-4-hydrogen';
 
     try {
       const replyText = await generateContentWithRetry({
@@ -774,7 +796,7 @@ ${typeof caseContext === 'string' ? caseContext : JSON.stringify(caseContext, nu
       const reply = await generateContentWithRetry({
         contents: prompt,
         systemInstruction: SYSTEM_INSTRUCTION,
-        preferredModel: 'gemini-3.8-flash',
+        preferredModel: 'gemini-4-hydrogen',
       });
       return res.json({ success: true, answer: reply, provider: 'gemini' });
     } catch {
@@ -825,7 +847,7 @@ ${typeof caseContext === 'string' ? caseContext : JSON.stringify(caseContext, nu
       const memorandum = await generateContentWithRetry({
         contents: prompt,
         systemInstruction: SYSTEM_INSTRUCTION,
-        preferredModel: 'gemini-3.8-flash',
+        preferredModel: 'gemini-4-hydrogen',
       });
       return res.json({ success: true, memorandum });
     } catch {
@@ -936,7 +958,7 @@ apiRouter.post('/generate-appeal-memorandum', async (req, res) => {
       const appealMemo = await generateContentWithRetry({
         contents: prompt,
         systemInstruction: SYSTEM_INSTRUCTION,
-        preferredModel: 'gemini-3.8-flash',
+        preferredModel: 'gemini-4-hydrogen',
       });
       return res.json({ success: true, appealMemorandum: appealMemo });
     } catch {
@@ -1050,7 +1072,7 @@ apiRouter.post('/analyze-judgment-deed', async (req, res) => {
       });
     }
 
-    const allowedMimeTypes = new Set(['application/pdf', 'image/jpeg', 'image/jpg', 'image/png']);
+    const allowedMimeTypes = new Set(['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
     let effectiveMime = (mimeType || '').toLowerCase().trim();
     if (effectiveMime === 'image/jpg') {
       effectiveMime = 'image/jpeg';
@@ -1059,143 +1081,266 @@ apiRouter.post('/analyze-judgment-deed', async (req, res) => {
       const lowerName = fileName.toLowerCase();
       if (lowerName.endsWith('.pdf')) effectiveMime = 'application/pdf';
       else if (lowerName.endsWith('.png')) effectiveMime = 'image/png';
+      else if (lowerName.endsWith('.webp')) effectiveMime = 'image/webp';
       else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) effectiveMime = 'image/jpeg';
     }
 
     if (!allowedMimeTypes.has(effectiveMime)) {
       return res.status(400).json({
         success: false,
-        error: 'صيغة الملف غير مدعومة. الصيغ المقبولة فقط: PDF و JPG و PNG.',
+        error: 'صيغة الملف غير مدعومة. الصيغ المقبولة فقط: PDF و JPG و PNG و WebP.',
       });
     }
 
-    if (!apiKey || apiKey === 'dummy-fallback-key') {
-      return res.status(503).json({
-        success: false,
-        error:
-          'مفتاح Gemini API غير مُعد على الخادم. يرجى إضافة GEMINI_API_KEY في إعدادات الأسرار (Settings > Secrets).',
-      });
-    }
-
+    const geminiClient = getGeminiClient();
     const cleanBase64 = fileBase64.includes(';base64,')
       ? fileBase64.split(';base64,')[1]
       : fileBase64;
 
-    const response = await ai.models.generateContent({
-      model: HIGH_ACCURACY_MODEL,
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: effectiveMime,
-              data: cleanBase64,
-            },
-          },
-          {
-            text: DEED_ANALYSIS_USER_PROMPT,
-          },
-        ],
-      },
-      config: {
-        systemInstruction: DEED_ANALYSIS_SYSTEM_PROMPT,
-        thinkingConfig: {
-          thinkingLevel: ThinkingLevel.HIGH,
-        },
-        responseMimeType: 'application/json',
-        responseSchema: {
+    const deedResponseSchema = {
+      type: Type.OBJECT,
+      properties: {
+        بيانات_القضية: {
           type: Type.OBJECT,
           properties: {
-            بيانات_القضية: {
-              type: Type.OBJECT,
-              properties: {
-                رقم_الصك: { type: Type.STRING },
-                رقم_القضية: { type: Type.STRING },
-                المحكمة: { type: Type.STRING },
-                الدائرة: { type: Type.STRING },
-                تاريخ_الصك_هجري: { type: Type.STRING },
-                نوع_القضية: { type: Type.STRING },
-              },
-              required: [
-                'رقم_الصك',
-                'رقم_القضية',
-                'المحكمة',
-                'الدائرة',
-                'تاريخ_الصك_هجري',
-                'نوع_القضية',
-              ],
-            },
-            الاطراف: {
-              type: Type.OBJECT,
-              properties: {
-                المدعي: { type: Type.STRING },
-                المدعى_عليه: { type: Type.STRING },
-                رقم_هوية_المدعى_عليه: { type: Type.STRING },
-                الجنسية: { type: Type.STRING },
-              },
-              required: ['المدعي', 'المدعى_عليه', 'رقم_هوية_المدعى_عليه', 'الجنسية'],
-            },
-            الوقائع: { type: Type.STRING },
-            التهمة_والمادة_النظامية: { type: Type.STRING },
-            الادلة: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            منطوق_الحكم_حرفيا: { type: Type.STRING },
-            العقوبات: {
-              type: Type.OBJECT,
-              properties: {
-                السجن: { type: Type.STRING },
-                الغرامة: { type: Type.STRING },
-                المنع_من_السفر: { type: Type.STRING },
-                المصادرة: { type: Type.STRING },
-                اشياء_اخرى: { type: Type.STRING },
-              },
-              required: ['السجن', 'الغرامة', 'المنع_من_السفر', 'المصادرة', 'اشياء_اخرى'],
-            },
-            هل_الحكم_نهائي: { type: Type.STRING },
-            الصفة_النهائية: { type: Type.STRING },
-            الاستئناف_والنقض: { type: Type.STRING },
-            التماس_اعادة_النظر: {
-              type: Type.OBJECT,
-              properties: {
-                هل_يقبل_التماس: { type: Type.STRING },
-                السبب: { type: Type.STRING },
-                الشروط_المطلوبة: { type: Type.STRING },
-              },
-              required: ['هل_يقبل_التماس', 'السبب', 'الشروط_المطلوبة'],
-            },
-            تنبيهات_الدقة: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            ملخص_بسيط_للمواطن: { type: Type.STRING },
+            رقم_الصك: { type: Type.STRING },
+            رقم_القضية: { type: Type.STRING },
+            المحكمة: { type: Type.STRING },
+            الدائرة: { type: Type.STRING },
+            تاريخ_الصك_هجري: { type: Type.STRING },
+            نوع_القضية: { type: Type.STRING },
           },
           required: [
-            'بيانات_القضية',
-            'الاطراف',
-            'الوقائع',
-            'التهمة_والمادة_النظامية',
-            'الادلة',
-            'منطوق_الحكم_حرفيا',
-            'العقوبات',
-            'هل_الحكم_نهائي',
-            'الصفة_النهائية',
-            'الاستئناف_والنقض',
-            'التماس_اعادة_النظر',
-            'تنبيهات_الدقة',
-            'ملخص_بسيط_للمواطن',
+            'رقم_الصك',
+            'رقم_القضية',
+            'المحكمة',
+            'الدائرة',
+            'تاريخ_الصك_هجري',
+            'نوع_القضية',
           ],
         },
+        الاطراف: {
+          type: Type.OBJECT,
+          properties: {
+            المدعي: { type: Type.STRING },
+            المدعى_عليه: { type: Type.STRING },
+            رقم_هوية_المدعى_عليه: { type: Type.STRING },
+            الجنسية: { type: Type.STRING },
+          },
+          required: ['المدعي', 'المدعى_عليه', 'رقم_هوية_المدعى_عليه', 'الجنسية'],
+        },
+        الوقائع: { type: Type.STRING },
+        التهمة_والمادة_النظامية: { type: Type.STRING },
+        الادلة: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+        },
+        منطوق_الحكم_حرفيا: { type: Type.STRING },
+        العقوبات: {
+          type: Type.OBJECT,
+          properties: {
+            السجن: { type: Type.STRING },
+            الغرامة: { type: Type.STRING },
+            المنع_من_السفر: { type: Type.STRING },
+            المصادرة: { type: Type.STRING },
+            اشياء_اخرى: { type: Type.STRING },
+          },
+          required: ['السجن', 'الغرامة', 'المنع_من_السفر', 'المصادرة', 'اشياء_اخرى'],
+        },
+        هل_الحكم_نهائي: { type: Type.STRING },
+        الصفة_النهائية: { type: Type.STRING },
+        الاستئناف_والنقض: { type: Type.STRING },
+        التماس_اعادة_النظر: {
+          type: Type.OBJECT,
+          properties: {
+            هل_يقبل_التماس: { type: Type.STRING },
+            السبب: { type: Type.STRING },
+            الشروط_المطلوبة: { type: Type.STRING },
+          },
+          required: ['هل_يقبل_التماس', 'السبب', 'الشروط_المطلوبة'],
+        },
+        تنبيهات_الدقة: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+        },
+        ملخص_بسيط_للمواطن: { type: Type.STRING },
       },
-    });
+      required: [
+        'بيانات_القضية',
+        'الاطراف',
+        'الوقائع',
+        'التهمة_والمادة_النظامية',
+        'الادلة',
+        'منطوق_الحكم_حرفيا',
+        'العقوبات',
+        'هل_الحكم_نهائي',
+        'الصفة_النهائية',
+        'الاستئناف_والنقض',
+        'التماس_اعادة_النظر',
+        'تنبيهات_الدقة',
+        'ملخص_بسيط_للمواطن',
+      ],
+    };
 
-    const rawText = (response.text ?? '').trim();
-    const parsed = extractJson(rawText);
+    const callDeedGeminiModel = async (
+      modelName: string,
+      thinkingLevel?: ThinkingLevel
+    ): Promise<string> => {
+      if (!geminiClient) {
+        throw new Error('GEMINI_API_KEY is not configured');
+      }
+      const config: any = {
+        systemInstruction: DEED_ANALYSIS_SYSTEM_PROMPT,
+        responseMimeType: 'application/json',
+        responseSchema: deedResponseSchema,
+      };
+      if (thinkingLevel) {
+        config.thinkingConfig = { thinkingLevel };
+      }
+
+      const res = await geminiClient.models.generateContent({
+        model: modelName,
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: effectiveMime,
+                data: cleanBase64,
+              },
+            },
+            {
+              text: DEED_ANALYSIS_USER_PROMPT,
+            },
+          ],
+        },
+        config,
+      });
+
+      const txt = (res.text ?? '').trim();
+      if (!txt) {
+        throw new Error(`Empty response from ${modelName}`);
+      }
+      return txt;
+    };
+
+    let rawText = '';
+    let modelUsed = HIGH_ACCURACY_MODEL;
+    let lastGeminiErr: any = null;
+
+    // Tier 1 & 2: Gemini full inlineData visual page-by-page analysis with retry & overload cascade
+    if (geminiClient) {
+      const geminiAttempts: Array<{ model: string; level?: ThinkingLevel; delayMs: number }> = [
+        { model: HIGH_ACCURACY_MODEL, level: ThinkingLevel.HIGH, delayMs: 0 },
+        { model: HIGH_ACCURACY_MODEL, level: ThinkingLevel.MEDIUM, delayMs: 1200 },
+        { model: 'gemini-3.1-flash-lite', delayMs: 0 },
+      ];
+
+      for (const attempt of geminiAttempts) {
+        try {
+          if (attempt.delayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, attempt.delayMs));
+          }
+          rawText = await callDeedGeminiModel(attempt.model, attempt.level);
+          const candidateJson = extractJson(rawText);
+          if (candidateJson && typeof candidateJson === 'object') {
+            modelUsed = attempt.model;
+            break;
+          }
+        } catch (err: any) {
+          lastGeminiErr = err;
+          const msg = err?.message || String(err);
+          console.warn(
+            `[Analyze Judgment Deed] Attempt ${attempt.model} failed:`,
+            msg.slice(0, 240)
+          );
+
+          // Stop immediately only on definitive client/auth/corrupted-file errors
+          if (
+            msg.includes('PERMISSION_DENIED') ||
+            msg.includes('API_KEY_INVALID') ||
+            msg.includes('API key not valid') ||
+            msg.includes('403')
+          ) {
+            break;
+          }
+          if (msg.includes('INVALID_ARGUMENT') || msg.includes('Unable to process')) {
+            return res.status(400).json({
+              success: false,
+              error:
+                'تعذر قراءة الملف المرفوع عبر Gemini. يرجى التأكد من أن ملف PDF أو الصورة سليم وغير محمي بكلمة مرور ثم المحاولة مجدداً.',
+            });
+          }
+        }
+      }
+    }
+
+    let parsed = extractJson(rawText);
+
+    // Tier 3: If Gemini is unavailable/overloaded on a digital PDF and OPENAI_API_KEY is available,
+    // extract text cleanly page-by-page and produce the exact same high-accuracy JSON via OpenAI GPT-4o
+    if ((!parsed || typeof parsed !== 'object') && effectiveMime === 'application/pdf' && OPENAI_API_KEY) {
+      try {
+        const pdfBuffer = Buffer.from(cleanBase64, 'base64');
+        const { totalPages, text: pagesText } = await extractText(new Uint8Array(pdfBuffer), {
+          mergePages: false,
+        });
+        const formattedPages = (Array.isArray(pagesText) ? pagesText : [String(pagesText || '')])
+          .map((pageStr, idx) => {
+            const cleaned = String(pageStr || '').trim();
+            return cleaned ? `--- صفحة ${idx + 1} من ${totalPages || 1} ---\n${cleaned}` : '';
+          })
+          .filter(Boolean);
+        const extractedPdfText = formattedPages.join('\n\n').trim();
+
+        if (extractedPdfText.replace(/---\s*صفحة[\s\S]*?---/g, '').trim().length >= 25) {
+          console.log('[Analyze Judgment Deed] Falling back to OpenAI GPT-4o structured JSON on extracted PDF text');
+          const openAiRes = await fetch(OPENAI_API_URL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+              model: 'gpt-4o',
+              temperature: 0,
+              response_format: { type: 'json_object' },
+              messages: [
+                { role: 'system', content: DEED_ANALYSIS_SYSTEM_PROMPT },
+                {
+                  role: 'user',
+                  content: `${DEED_ANALYSIS_USER_PROMPT}\n\nنص صفحات الصك المستخرج:\n"""\n${extractedPdfText}\n"""`,
+                },
+              ],
+            }),
+          });
+          const openAiData: any = await openAiRes.json();
+          const openAiText = openAiData?.choices?.[0]?.message?.content || '';
+          const openAiParsed = extractJson(openAiText);
+          if (openAiParsed && typeof openAiParsed === 'object') {
+            parsed = openAiParsed;
+            modelUsed = 'gpt-4o';
+          }
+        }
+      } catch (openAiFallbackErr: any) {
+        console.warn('[Analyze Judgment Deed] OpenAI PDF fallback failed:', openAiFallbackErr?.message || openAiFallbackErr);
+      }
+    }
 
     if (!parsed || typeof parsed !== 'object') {
+      if (lastGeminiErr) {
+        throw lastGeminiErr;
+      }
+      if (!geminiClient) {
+        return res.status(503).json({
+          success: false,
+          error:
+            'مفتاح Gemini API (GEMINI_API_KEY) غير مُعد حالياً في إعدادات الأسرار (Settings > Secrets). يعمل خيار Gemini 4 لتحليل الملفات والصور بشكل مستقل عن مفتاح OpenAI.',
+        });
+      }
       return res.status(502).json({
         success: false,
-        error: 'تعذر قراءة مخرجات التحليل بصيغة JSON صحيحة من نموذج الذكاء الاصطناعي. يرجى المحاولة مرة أخرى.',
+        error:
+          'تعذر قراءة مخرجات التحليل بصيغة JSON صحيحة من نموذج الذكاء الاصطناعي. يرجى المحاولة مرة أخرى.',
       });
     }
 
@@ -1249,17 +1394,36 @@ apiRouter.post('/analyze-judgment-deed', async (req, res) => {
 
     return res.json({
       success: true,
-      modelUsed: HIGH_ACCURACY_MODEL,
+      modelUsed,
       result: normalizedResult,
     });
   } catch (err: any) {
     const errMessage = err?.message || String(err);
     console.error(`[Analyze Judgment Deed] ${HIGH_ACCURACY_MODEL} error:`, errMessage);
 
-    if (errMessage.includes('PERMISSION_DENIED') || errMessage.includes('API_KEY_INVALID') || errMessage.includes('403') || errMessage.includes('400')) {
+    if (
+      errMessage.includes('PERMISSION_DENIED') ||
+      errMessage.includes('API_KEY_INVALID') ||
+      errMessage.includes('API key not valid') ||
+      errMessage.includes('403')
+    ) {
       return res.status(502).json({
         success: false,
         error: 'تعذر التحقق من مفتاح Gemini API في إعدادات الأسرار (Settings > Secrets). يرجى التأكد من صلاحية المفتاح والمحاولة مجدداً.',
+      });
+    }
+
+    if (errMessage.includes('INVALID_ARGUMENT') || errMessage.includes('Unable to process')) {
+      return res.status(400).json({
+        success: false,
+        error: 'تعذر قراءة الملف المرفوع عبر Gemini. يرجى التأكد من أن ملف PDF أو الصورة سليم وغير محمي بكلمة مرور ثم المحاولة مجدداً.',
+      });
+    }
+
+    if (errMessage.includes('503') || errMessage.includes('UNAVAILABLE') || errMessage.includes('high demand')) {
+      return res.status(503).json({
+        success: false,
+        error: 'يشهد نموذج الذكاء الاصطناعي ضغطاً مؤقتاً حالياً (503). يرجى الضغط على «إعادة المحاولة» بعد ثوانٍ قليلة.',
       });
     }
 
@@ -1273,6 +1437,60 @@ apiRouter.post('/analyze-judgment-deed', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: `حدث خطأ أثناء تحليل صك الحكم: ${errMessage}`,
+    });
+  }
+});
+
+// Endpoint: Extract text from digital PDF (for GPT-4o text card or scanned PDF detection)
+apiRouter.post('/extract-pdf-text', async (req, res) => {
+  try {
+    const { fileBase64 } = req.body || {};
+    if (!fileBase64 || typeof fileBase64 !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'يرجى إرسال ملف PDF صالح لاستخراج النص.',
+      });
+    }
+
+    const cleanBase64 = fileBase64.includes(';base64,')
+      ? fileBase64.split(';base64,')[1]
+      : fileBase64;
+    const buffer = Buffer.from(cleanBase64, 'base64');
+
+    if (!buffer.length) {
+      return res.status(400).json({
+        success: false,
+        error: 'ملف PDF المرفوع فارغ أو تالف.',
+      });
+    }
+
+    const { totalPages, text: pagesText } = await extractText(new Uint8Array(buffer), {
+      mergePages: false,
+    });
+
+    const formattedPages = (Array.isArray(pagesText) ? pagesText : [String(pagesText || '')])
+      .map((pageStr, idx) => {
+        const cleaned = String(pageStr || '').trim();
+        if (!cleaned) return '';
+        return totalPages > 1 ? `--- صفحة ${idx + 1} ---\n${cleaned}` : cleaned;
+      })
+      .filter(Boolean);
+
+    const combinedText = formattedPages.join('\n\n').trim();
+    const meaningfulChars = combinedText.replace(/---\s*صفحة\s*\d+\s*---/g, '').trim().length;
+
+    return res.json({
+      success: true,
+      text: combinedText,
+      totalPages: totalPages || 1,
+      hasSelectableText: meaningfulChars >= 20,
+    });
+  } catch (err: any) {
+    console.warn('[Extract PDF Text] Failed:', err?.message || err);
+    return res.status(422).json({
+      success: false,
+      hasSelectableText: false,
+      error: 'تعذر استخراج نص قابل للنسخ من هذا الملف (قد يكون ملف PDF مصوّراً بالماسح الضوئي أو محمياً).',
     });
   }
 });
@@ -1381,9 +1599,15 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.resolve(__dirname, 'dist');
+    const localDist = path.resolve(__dirname, 'dist');
+    const cwdDist = path.resolve(process.cwd(), 'dist');
+    const distPath = fs.existsSync(localDist) ? localDist : cwdDist;
+
     app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/assets/')) {
+        return next();
+      }
       res.sendFile(path.resolve(distPath, 'index.html'));
     });
   }
