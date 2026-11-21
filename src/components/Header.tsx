@@ -1,5 +1,5 @@
 import React from 'react';
-import { Scale, BookOpen, FileText, MessageSquare, Printer, RotateCcw, HeartHandshake } from 'lucide-react';
+import { Scale, BookOpen, FileText, MessageSquare, Printer, RotateCcw, HeartHandshake, FileSearch } from 'lucide-react';
 
 interface HeaderProps {
   onOpenStatutes: () => void;
@@ -7,6 +7,8 @@ interface HeaderProps {
   onOpenDefendantAppeal?: () => void;
   onReset: () => void;
   onOpenChat?: () => void;
+  onOpenDeedAnalyzer?: () => void;
+  isDeedAnalyzerActive?: boolean;
   hasAnalysis: boolean;
   onPrint: () => void;
 }
@@ -17,6 +19,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenDefendantAppeal,
   onReset,
   onOpenChat,
+  onOpenDeedAnalyzer,
+  isDeedAnalyzerActive,
   hasAnalysis,
   onPrint,
 }) => {
@@ -47,6 +51,21 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-2 flex-wrap">
+          {onOpenDeedAnalyzer && (
+            <button
+              onClick={onOpenDeedAnalyzer}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors shadow-sm border ${
+                isDeedAnalyzerActive
+                  ? 'bg-amber-600 text-white border-amber-400'
+                  : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-amber-700/50'
+              }`}
+              title="صفحة تحليل صك الحكم بالذكاء الاصطناعي (PDF / JPG / PNG)"
+            >
+              <FileSearch className="w-3.5 h-3.5" />
+              <span>تحليل صك الحكم</span>
+            </button>
+          )}
+
           {onOpenChat && (
             <button
               onClick={onOpenChat}

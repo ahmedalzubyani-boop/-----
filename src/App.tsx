@@ -23,12 +23,14 @@ import {
   X,
   RotateCcw,
   FileUp,
-  Clock
+  Clock,
+  FileSearch
 } from 'lucide-react';
 import { Header } from './components/Header';
 import { DisclaimerBanner } from './components/DisclaimerBanner';
 import { CaseInputCard } from './components/CaseInputCard';
 import { PdfJudgmentUploadCard } from './components/PdfJudgmentUploadCard';
+import { JudgmentDeedAnalyzerPage } from './components/JudgmentDeedAnalyzerPage';
 import { DeedVerdictAnalysisDashboard } from './components/DeedVerdictAnalysisDashboard';
 import { AppealBriefModal } from './components/AppealBriefModal';
 import { DefendantAppealDrafterModal } from './components/DefendantAppealDrafterModal';
@@ -51,8 +53,8 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastPayload, setLastPayload] = useState<any>(null);
 
-  // Home view mode: 'analyzer' | 'pdf_deed' | 'standalone_chat'
-  const [viewMode, setViewMode] = useState<'analyzer' | 'pdf_deed' | 'standalone_chat'>('pdf_deed');
+  // Home view mode: 'analyzer' | 'pdf_deed' | 'deed_gemini' | 'standalone_chat'
+  const [viewMode, setViewMode] = useState<'analyzer' | 'pdf_deed' | 'deed_gemini' | 'standalone_chat'>('pdf_deed');
 
   const [activeTab, setActiveTab] = useState<
     'deed' | 'overview' | 'legality' | 'testimony' | 'evidence' | 'defenses' | 'consultant'
@@ -207,7 +209,16 @@ ${analysis.chargesAndStatutes.map((c, i) => `${i + 1}. ${c.charge} - ${c.statute
         onOpenMemorandum={() => setIsMemorandumOpen(true)}
         onOpenDefendantAppeal={() => setIsDefendantAppealModalOpen(true)}
         onReset={handleReset}
-        onOpenChat={() => setViewMode(viewMode === 'standalone_chat' ? 'pdf_deed' : 'standalone_chat')}
+        onOpenChat={() => {
+          setAnalysis(null);
+          setViewMode(viewMode === 'standalone_chat' ? 'pdf_deed' : 'standalone_chat');
+        }}
+        onOpenDeedAnalyzer={() => {
+          setAnalysis(null);
+          setErrorMessage(null);
+          setViewMode('deed_gemini');
+        }}
+        isDeedAnalyzerActive={!analysis && viewMode === 'deed_gemini'}
         hasAnalysis={!!analysis}
         onPrint={handlePrint}
       />
@@ -267,6 +278,19 @@ ${analysis.chargesAndStatutes.map((c, i) => `${i + 1}. ${c.charge} - ${c.statute
 
             <button
               type="button"
+              onClick={() => setViewMode('deed_gemini')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap ${
+                viewMode === 'deed_gemini'
+                  ? 'bg-emerald-800 text-white shadow-md border border-emerald-500/40'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <FileSearch className="w-4 h-4 text-amber-300" />
+              <span>تحليل صك الحكم</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setViewMode('analyzer')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap ${
                 viewMode === 'analyzer'
@@ -299,6 +323,11 @@ ${analysis.chargesAndStatutes.map((c, i) => `${i + 1}. ${c.charge} - ${c.statute
             <PdfJudgmentUploadCard onAnalyzePdf={handleAnalyze} isLoading={isLoading} />
             <DisclaimerBanner />
           </div>
+        )}
+
+        {/* 1b. Dedicated Gemini Judgment Deed Analysis Page ("تحليل صك الحكم") */}
+        {!analysis && viewMode === 'deed_gemini' && (
+          <JudgmentDeedAnalyzerPage />
         )}
 
         {/* 2. Standalone Chatbot View */}

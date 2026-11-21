@@ -2,11 +2,17 @@ import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import {
   generateSaudiLegalAnalysisFallback,
   generateIntelligentJudicialAdvisorReply,
 } from './src/utils/fallbackLegalAnalyzer.ts';
+import {
+  HIGH_ACCURACY_MODEL,
+  HIGH_ACCURACY_MODEL_CONFIG,
+  DEED_ANALYSIS_SYSTEM_PROMPT,
+  DEED_ANALYSIS_USER_PROMPT,
+} from './prompt.js';
 
 dotenv.config();
 
@@ -16,8 +22,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '65mb' }));
+app.use(express.urlencoded({ extended: true, limit: '65mb' }));
 
 // =============================================
 // إعدادات الاتصال - مستشار المحلل العدلي (OpenAI / لونا-GPT-6)
@@ -152,6 +158,27 @@ export async function استدعاءالمحللالعدلي(رسالةالمس�
 لا تناقض نفسك أبداً. إذا خلصت في التحليل إلى أن طريق الاعتراض غير جائز أو أن المسار الذي يطلبه المستخدم غير صحيح نظاماً، فلا تكمل وتصوغ اللائحة بنفس الطريق الخاطئ مجاراةً لطلب المستخدم. توقف فوراً عن الصياغة، ونبه المستخدم إلى عدم جواز المسار، وصحح له المسار النظامي الصحيح، ثم اسأله هل يريد صياغة اللائحة وفق المسار الصحيح (مثل طلب النقض أمام المحكمة العليا إن كان جائزاً).
 
 قدم إجاباتك بدقة ووضوح، واذكر المصادر عند توفرها، وكن مهنياً ومباشراً.`,
+  });
+}
+
+// دالة تحليل نص الصك أو المحضر عبر OpenAI (gpt-4o) باستخدام OPENAI_API_KEY من متغيرات البيئة فقط
+export async function tahlilSok(nasSok: string): Promise<string> {
+  if (!OPENAI_API_KEY) {
+    throw new Error('مفتاح OPENAI_API_KEY غير مُعد في ملف .env أو إعدادات الأسرار (Settings > Secrets).');
+  }
+
+  return await callOpenAILegalAdvisor({
+    messages: [{ role: 'user', content: `قم بتحليل هذا النص من الصك: ${nasSok}` }],
+    preferredModel: 'gpt-4o',
+    systemInstruction: `أنت مستشار قضائي سعودي خبير. قم بتحليل صكوك الأحكام القضائية ومحاضر الضبط والتحقيقات بدقة وفقاً للأنظمة السعودية. أخرج النتيجة منظمة في أقسام واضحة.
+
+القواعد الإلزامية قبل تصنيف أي حكم أو صياغة أي اعتراض:
+1. حدد نوع الحكم ودرجته أولاً من منطوقه ورقمه والجهة المصدرة له:
+   - إذا كان صادراً من المحكمة الابتدائية: حكم ابتدائي، والطريق الصحيح هو الاعتراض بالاستئناف أمام محكمة الاستئناف.
+   - إذا كان صادراً من محكمة الاستئناف: حكم استئنافي (وهو الحكم المعتمد والنافذ)، ولا يجوز أبداً صياغة استئناف عليه مرة ثانية؛ والطريق الصحيح هو طلب النقض أمام المحكمة العليا فقط إن جاز نظاماً.
+   - إذا كان صادراً من المحكمة العليا: حكم نهائي بات لا يقبل أي اعتراض.
+2. لا تخمن أي رقم أو تاريخ غير مذكور صراحة في النص، وإذا غابت معلومة اكتب: "غير مذكورة في النص المرفق".
+3. لا تناقض نفسك أبداً في المسار النظامي للاعتراض.`,
   });
 }
 
@@ -1007,6 +1034,272 @@ apiRouter.post('/generate-appeal-memorandum', async (req, res) => {
   } catch (err: any) {
     console.error('Appeal memorandum error:', err);
     return res.status(500).json({ error: 'تعذر توليد اللائحة الاعتراضية الاستئنافية' });
+  }
+});
+
+// Endpoint: Stateless Judgment Deed Analyzer Page ("تحليل صك الحكم")
+// Processes uploaded PDF/JPG/PNG completely in memory via inlineData (never saved to disk)
+apiRouter.post('/analyze-judgment-deed', async (req, res) => {
+  try {
+    const { fileBase64, mimeType, fileName } = req.body || {};
+
+    if (!fileBase64 || typeof fileBase64 !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'يرجى إرفاق ملف صك الحكم بصيغة PDF أو صورة (JPG / PNG).',
+      });
+    }
+
+    const allowedMimeTypes = new Set(['application/pdf', 'image/jpeg', 'image/jpg', 'image/png']);
+    let effectiveMime = (mimeType || '').toLowerCase().trim();
+    if (effectiveMime === 'image/jpg') {
+      effectiveMime = 'image/jpeg';
+    }
+    if (!effectiveMime && typeof fileName === 'string') {
+      const lowerName = fileName.toLowerCase();
+      if (lowerName.endsWith('.pdf')) effectiveMime = 'application/pdf';
+      else if (lowerName.endsWith('.png')) effectiveMime = 'image/png';
+      else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) effectiveMime = 'image/jpeg';
+    }
+
+    if (!allowedMimeTypes.has(effectiveMime)) {
+      return res.status(400).json({
+        success: false,
+        error: 'صيغة الملف غير مدعومة. الصيغ المقبولة فقط: PDF و JPG و PNG.',
+      });
+    }
+
+    if (!apiKey || apiKey === 'dummy-fallback-key') {
+      return res.status(503).json({
+        success: false,
+        error:
+          'مفتاح Gemini API غير مُعد على الخادم. يرجى إضافة GEMINI_API_KEY في إعدادات الأسرار (Settings > Secrets).',
+      });
+    }
+
+    const cleanBase64 = fileBase64.includes(';base64,')
+      ? fileBase64.split(';base64,')[1]
+      : fileBase64;
+
+    const response = await ai.models.generateContent({
+      model: HIGH_ACCURACY_MODEL,
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: effectiveMime,
+              data: cleanBase64,
+            },
+          },
+          {
+            text: DEED_ANALYSIS_USER_PROMPT,
+          },
+        ],
+      },
+      config: {
+        systemInstruction: DEED_ANALYSIS_SYSTEM_PROMPT,
+        temperature: HIGH_ACCURACY_MODEL_CONFIG.temperature,
+        topP: HIGH_ACCURACY_MODEL_CONFIG.topP,
+        maxOutputTokens: HIGH_ACCURACY_MODEL_CONFIG.maxOutputTokens,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            بيانات_القضية: {
+              type: Type.OBJECT,
+              properties: {
+                رقم_الصك: { type: Type.STRING },
+                رقم_القضية: { type: Type.STRING },
+                المحكمة: { type: Type.STRING },
+                الدائرة: { type: Type.STRING },
+                تاريخ_الصك_هجري: { type: Type.STRING },
+                نوع_القضية: { type: Type.STRING },
+              },
+              required: [
+                'رقم_الصك',
+                'رقم_القضية',
+                'المحكمة',
+                'الدائرة',
+                'تاريخ_الصك_هجري',
+                'نوع_القضية',
+              ],
+            },
+            الاطراف: {
+              type: Type.OBJECT,
+              properties: {
+                المدعي: { type: Type.STRING },
+                المدعى_عليه: { type: Type.STRING },
+                رقم_هوية_المدعى_عليه: { type: Type.STRING },
+                الجنسية: { type: Type.STRING },
+              },
+              required: ['المدعي', 'المدعى_عليه', 'رقم_هوية_المدعى_عليه', 'الجنسية'],
+            },
+            الوقائع: { type: Type.STRING },
+            التهمة_والمادة_النظامية: { type: Type.STRING },
+            الادلة: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+            },
+            منطوق_الحكم_حرفيا: { type: Type.STRING },
+            العقوبات: {
+              type: Type.OBJECT,
+              properties: {
+                السجن: { type: Type.STRING },
+                الغرامة: { type: Type.STRING },
+                المنع_من_السفر: { type: Type.STRING },
+                المصادرة: { type: Type.STRING },
+                اشياء_اخرى: { type: Type.STRING },
+              },
+              required: ['السجن', 'الغرامة', 'المنع_من_السفر', 'المصادرة', 'اشياء_اخرى'],
+            },
+            هل_الحكم_نهائي: { type: Type.STRING },
+            الصفة_النهائية: { type: Type.STRING },
+            الاستئناف_والنقض: { type: Type.STRING },
+            التماس_اعادة_النظر: {
+              type: Type.OBJECT,
+              properties: {
+                هل_يقبل_التماس: { type: Type.STRING },
+                السبب: { type: Type.STRING },
+                الشروط_المطلوبة: { type: Type.STRING },
+              },
+              required: ['هل_يقبل_التماس', 'السبب', 'الشروط_المطلوبة'],
+            },
+            تنبيهات_الدقة: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+            },
+            ملخص_بسيط_للمواطن: { type: Type.STRING },
+          },
+          required: [
+            'بيانات_القضية',
+            'الاطراف',
+            'الوقائع',
+            'التهمة_والمادة_النظامية',
+            'الادلة',
+            'منطوق_الحكم_حرفيا',
+            'العقوبات',
+            'هل_الحكم_نهائي',
+            'الصفة_النهائية',
+            'الاستئناف_والنقض',
+            'التماس_اعادة_النظر',
+            'تنبيهات_الدقة',
+            'ملخص_بسيط_للمواطن',
+          ],
+        },
+      },
+    });
+
+    const rawText = (response.text ?? '').trim();
+    const parsed = extractJson(rawText);
+
+    if (!parsed || typeof parsed !== 'object') {
+      return res.status(502).json({
+        success: false,
+        error: 'تعذر قراءة مخرجات التحليل بصيغة JSON صحيحة من نموذج الذكاء الاصطناعي. يرجى المحاولة مرة أخرى.',
+      });
+    }
+
+    const fallbackText = 'غير مذكورة في الصك';
+    const caseInfo = parsed['بيانات_القضية'] || {};
+    const partiesInfo = parsed['الاطراف'] || {};
+    const penaltiesInfo = parsed['العقوبات'] || {};
+    const petitionInfo = parsed['التماس_اعادة_النظر'] || {};
+
+    const normalizedResult = {
+      بيانات_القضية: {
+        رقم_الصك: String(caseInfo['رقم_الصك'] || fallbackText),
+        رقم_القضية: String(caseInfo['رقم_القضية'] || fallbackText),
+        المحكمة: String(caseInfo['المحكمة'] || fallbackText),
+        الدائرة: String(caseInfo['الدائرة'] || fallbackText),
+        تاريخ_الصك_هجري: String(caseInfo['تاريخ_الصك_هجري'] || fallbackText),
+        نوع_القضية: String(caseInfo['نوع_القضية'] || fallbackText),
+      },
+      الاطراف: {
+        المدعي: String(partiesInfo['المدعي'] || fallbackText),
+        المدعى_عليه: String(partiesInfo['المدعى_عليه'] || fallbackText),
+        رقم_هوية_المدعى_عليه: String(partiesInfo['رقم_هوية_المدعى_عليه'] || fallbackText),
+        الجنسية: String(partiesInfo['الجنسية'] || fallbackText),
+      },
+      الوقائع: String(parsed['الوقائع'] || fallbackText),
+      التهمة_والمادة_النظامية: String(parsed['التهمة_والمادة_النظامية'] || fallbackText),
+      الادلة: Array.isArray(parsed['الادلة'])
+        ? parsed['الادلة'].map((item: any) => String(item || fallbackText)).filter(Boolean)
+        : [fallbackText],
+      منطوق_الحكم_حرفيا: String(parsed['منطوق_الحكم_حرفيا'] || fallbackText),
+      العقوبات: {
+        السجن: String(penaltiesInfo['السجن'] || fallbackText),
+        الغرامة: String(penaltiesInfo['الغرامة'] || fallbackText),
+        المنع_من_السفر: String(penaltiesInfo['المنع_من_السفر'] || fallbackText),
+        المصادرة: String(penaltiesInfo['المصادرة'] || fallbackText),
+        اشياء_اخرى: String(penaltiesInfo['اشياء_اخرى'] || fallbackText),
+      },
+      هل_الحكم_نهائي: String(parsed['هل_الحكم_نهائي'] || fallbackText),
+      الصفة_النهائية: String(parsed['الصفة_النهائية'] || fallbackText),
+      الاستئناف_والنقض: String(parsed['الاستئناف_والنقض'] || fallbackText),
+      التماس_اعادة_النظر: {
+        هل_يقبل_التماس: String(petitionInfo['هل_يقبل_التماس'] || 'ممكن'),
+        السبب: String(petitionInfo['السبب'] || fallbackText),
+        الشروط_المطلوبة: String(petitionInfo['الشروط_المطلوبة'] || fallbackText),
+      },
+      تنبيهات_الدقة: Array.isArray(parsed['تنبيهات_الدقة'])
+        ? parsed['تنبيهات_الدقة'].map((item: any) => String(item || '')).filter(Boolean)
+        : [],
+      ملخص_بسيط_للمواطن: String(parsed['ملخص_بسيط_للمواطن'] || fallbackText),
+    };
+
+    return res.json({
+      success: true,
+      modelUsed: HIGH_ACCURACY_MODEL,
+      result: normalizedResult,
+    });
+  } catch (err: any) {
+    const errMessage = err?.message || String(err);
+    console.error('[Analyze Judgment Deed] Gemini 2.5 Pro error:', errMessage);
+
+    if (errMessage.includes('PERMISSION_DENIED') || errMessage.includes('API_KEY_INVALID') || errMessage.includes('403') || errMessage.includes('400')) {
+      return res.status(502).json({
+        success: false,
+        error: 'تعذر التحقق من مفتاح Gemini API في إعدادات الأسرار (Settings > Secrets). يرجى التأكد من صلاحية المفتاح والمحاولة مجدداً.',
+      });
+    }
+
+    if (errMessage.includes('RESOURCE_EXHAUSTED') || errMessage.includes('429')) {
+      return res.status(429).json({
+        success: false,
+        error: 'تم الوصول للحد الأقصى المؤقت لطلبات الذكاء الاصطناعي. يرجى الانتظار قليلاً ثم إعادة المحاولة.',
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: `حدث خطأ أثناء تحليل صك الحكم: ${errMessage}`,
+    });
+  }
+});
+
+// Endpoint: OpenAI (gpt-4o) Text Deed Analysis via tahlilSok (uses server-side OPENAI_API_KEY)
+apiRouter.post('/tahlil-sok', async (req, res) => {
+  try {
+    const { nasSok } = req.body || {};
+    if (!nasSok || typeof nasSok !== 'string' || !nasSok.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: '❌ خطأ: يرجى إدخال نص الصك أو المحضر للتحليل.',
+      });
+    }
+
+    const analysisText = await tahlilSok(nasSok.trim());
+    return res.json({
+      success: true,
+      result: analysisText,
+    });
+  } catch (err: any) {
+    const errMessage = err?.message || String(err);
+    const statusCode = errMessage.includes('OPENAI_API_KEY') ? 503 : 500;
+    return res.status(statusCode).json({
+      success: false,
+      error: `❌ خطأ: ${errMessage}`,
+    });
   }
 });
 
