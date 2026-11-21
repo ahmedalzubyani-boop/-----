@@ -1,14 +1,12 @@
 /**
  * التعليمات الكاملة عالية الدقة لتحليل صكوك الأحكام القضائية السعودية عبر Gemini
- * يُستخدم مع نموذج: gemini-2.5-pro
+ * يُستخدم مع نموذج: gemini-4-hydrogen (النشط والمعتمد لقراءة المستندات بدقة عالية)
  */
 
-export const HIGH_ACCURACY_MODEL = 'gemini-2.5-pro';
+export const HIGH_ACCURACY_MODEL = 'gemini-4-hydrogen';
 
 export const HIGH_ACCURACY_MODEL_CONFIG = {
-  temperature: 0,
-  topP: 0.1,
-  maxOutputTokens: 8192,
+  thinkingLevel: 'HIGH',
 };
 
 export const DEED_ANALYSIS_SYSTEM_PROMPT = `

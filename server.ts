@@ -1098,9 +1098,9 @@ apiRouter.post('/analyze-judgment-deed', async (req, res) => {
       },
       config: {
         systemInstruction: DEED_ANALYSIS_SYSTEM_PROMPT,
-        temperature: HIGH_ACCURACY_MODEL_CONFIG.temperature,
-        topP: HIGH_ACCURACY_MODEL_CONFIG.topP,
-        maxOutputTokens: HIGH_ACCURACY_MODEL_CONFIG.maxOutputTokens,
+        thinkingConfig: {
+          thinkingLevel: ThinkingLevel.HIGH,
+        },
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -1254,7 +1254,7 @@ apiRouter.post('/analyze-judgment-deed', async (req, res) => {
     });
   } catch (err: any) {
     const errMessage = err?.message || String(err);
-    console.error('[Analyze Judgment Deed] Gemini 2.5 Pro error:', errMessage);
+    console.error(`[Analyze Judgment Deed] ${HIGH_ACCURACY_MODEL} error:`, errMessage);
 
     if (errMessage.includes('PERMISSION_DENIED') || errMessage.includes('API_KEY_INVALID') || errMessage.includes('403') || errMessage.includes('400')) {
       return res.status(502).json({

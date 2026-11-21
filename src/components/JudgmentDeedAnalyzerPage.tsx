@@ -128,7 +128,7 @@ function formatFullAnalysisAsText(result: HighAccuracyDeedAnalysis): string {
   const pet = result.التماس_اعادة_النظر;
 
   return [
-    'تقرير تحليل صك الحكم (دقة عالية - Gemini 2.5 Pro)',
+    'تقرير تحليل صك الحكم (دقة عالية - Gemini 4 Hydrogen)',
     '====================================================',
     '',
     'ملخص بسيط للمواطن:',
@@ -433,7 +433,7 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
           <div className="space-y-2">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-xs font-semibold text-amber-300">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>تحليل دقيق صفحة بصفحة (Gemini 2.5 Pro • درجة الحرارة 0)</span>
+              <span>تحليل دقيق صفحة بصفحة (Gemini 4 Hydrogen • التفكير العميق)</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-2.5">
               <Gavel className="w-7 h-7 text-amber-400 shrink-0" />
@@ -459,7 +459,7 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Input Mode Switcher (PDF/Image via Gemini 2.5 Pro vs Pasted Text via OpenAI gpt-4o) */}
+      {/* Input Mode Switcher (PDF/Image via Gemini 4 Hydrogen vs Pasted Text via OpenAI gpt-4o) */}
       {!isLoading && !isTextLoading && !result && !textAnalysisResult && (
         <div className="flex items-center gap-2 flex-wrap">
           <button
@@ -475,7 +475,7 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
             }`}
           >
             <FileUp className="w-4 h-4 text-amber-300" />
-            <span>رفع ملف الصك (PDF / JPG / PNG — Gemini 2.5 Pro)</span>
+            <span>رفع ملف الصك (PDF / JPG / PNG — Gemini 4)</span>
           </button>
 
           <button
@@ -649,7 +649,7 @@ export const JudgmentDeedAnalyzerPage: React.FC = () => {
             جاري قراءة الصك صفحة صفحة... جاري التحقق من الأرقام...
           </h3>
           <p className="text-xs sm:text-sm text-slate-400 max-w-lg mx-auto leading-relaxed">
-            التحليل الدقيق عبر نموذج <span className="text-amber-300 font-semibold">Gemini 2.5 Pro</span>{' '}
+            التحليل الدقيق عبر نموذج <span className="text-amber-300 font-semibold">Gemini 4 Hydrogen</span>{' '}
             يستغرق عادةً من <span className="text-emerald-300 font-semibold">20 إلى 40 ثانية</span>{' '}
             لمطابقة الأرقام والتواريخ وفحص الصفحة الأخيرة والصفة النهائية.
           </p>
